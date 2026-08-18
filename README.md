@@ -20,8 +20,8 @@ is published, on `127.0.0.1`.
 | `firecrawl-api` | `ghcr.io/firecrawl/firecrawl` | API + in-process workers; bound to `127.0.0.1:31002` |
 | `firecrawl-playwright` | `ghcr.io/firecrawl/playwright-service` | Headless-browser rendering (JS pages) |
 | `firecrawl-searxng` | `searxng/searxng` | `/search` backend |
-| `firecrawl-redis` | `redis:alpine` | Cache / rate-limit |
-| `firecrawl-rabbitmq` | `rabbitmq:3-management` | NuQ queue transport |
+| `firecrawl-redis` | `redis:8-alpine` | Cache / rate-limit |
+| `firecrawl-rabbitmq` | `rabbitmq:3.13-management` | NuQ queue transport |
 | `firecrawl-nuq-postgres` | `ghcr.io/firecrawl/nuq-postgres` | NuQ queue backend (bundles `pg_cron`) |
 
 ## Image pinning
@@ -29,7 +29,8 @@ is published, on `127.0.0.1`.
 The `firecrawl` (api) image publishes semver tags and is pinned via
 `FIRECRAWL_TAG` (default `2.11.202`). The `playwright-service` and `nuq-postgres`
 images publish only `latest` (no semver), matching upstream's own compose image
-references.
+references. The stock `redis`/`rabbitmq`/`searxng` sidecars are version-pinned
+for reproducible pulls.
 
 ## Setup
 

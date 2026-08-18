@@ -83,6 +83,10 @@ services:
       - firecrawl # reach redis/rabbitmq/postgres/playwright/searxng
     extra_hosts:
       - "host.docker.internal:host-gateway" # reach host services (e.g. local Ollama)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ulimits:
       nofile:
         soft: 65535
@@ -92,13 +96,13 @@ services:
     memswap_limit: ${FIRECRAWL_API_MEM:-3G}
     depends_on:
       firecrawl-redis:
-        condition: service_started
+        condition: service_healthy
       firecrawl-playwright:
         condition: service_started
       firecrawl-searxng:
         condition: service_started
       firecrawl-nuq-postgres:
-        condition: service_started
+        condition: service_healthy
       firecrawl-rabbitmq:
         condition: service_healthy
     healthcheck:
@@ -173,6 +177,12 @@ services:
     command: redis-server --bind 0.0.0.0
     networks:
       - firecrawl
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: ${RESTART:-unless-stopped}
     logging: *logging
 
@@ -207,6 +217,12 @@ services:
       - firecrawl-postgres-password
     networks:
       - firecrawl
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     restart: ${RESTART:-unless-stopped}
     logging: *logging
 
