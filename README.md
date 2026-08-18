@@ -1,1 +1,138 @@
 # firecrawl-stack
+
+Self-hosted [Firecrawl](https://github.com/firecrawl/firecrawl) — a web
+scraping/crawling/search API (scrape, crawl, map, search → clean markdown /
+structured data) designed to be consumed by AI agents.
+
+Image-based mirror of the upstream self-host Docker Compose, using **prebuilt
+ghcr images** (no source build), the **PostgreSQL (NuQ) queue backend**, and a
+**bundled SearXNG** so `/search` works. The experimental FoundationDB backend
+is intentionally omitted.
+
+## Services
+
+All services are gated behind the `firecrawl` compose profile (pre-enabled in
+`.env`) and live on a private `firecrawl` bridge network. Only `firecrawl-api`
+is published, on `127.0.0.1`.
+
+| Service | Image | Purpose |
+|---|---|---|
+| `firecrawl-api` | `ghcr.io/firecrawl/firecrawl` | API + in-process workers; bound to `127.0.0.1:31002` |
+| `firecrawl-playwright` | `ghcr.io/firecrawl/playwright-service` | Headless-browser rendering (JS pages) |
+| `firecrawl-searxng` | `searxng/searxng` | `/search` backend |
+| `firecrawl-redis` | `redis:8-alpine` | Cache / rate-limit |
+| `firecrawl-rabbitmq` | `rabbitmq:3.13-management` | NuQ queue transport |
+| `firecrawl-nuq-postgres` | `ghcr.io/firecrawl/nuq-postgres` | NuQ queue backend (bundles `pg_cron`) |
+
+## Image pinning
+
+The `firecrawl` (api) image publishes semver tags and is pinned via
+`FIRECRAWL_TAG` (default `2.11.202`). The `playwright-service` and `nuq-postgres`
+images publish only `latest` (no semver), matching upstream's own compose image
+references. The stock `redis`/`rabbitmq`/`searxng` sidecars are version-pinned
+for reproducible pulls.
+
+## Setup
+
+### 1. Create the postgres secret
+
+Only one secret file is required. It is loaded via docker `secrets:` and mapped
+to an environment variable by [`entrypoint.sh`](entrypoint.sh). It lives under
+`${SECRETS_BASE_DIR}/secrets` (default `~/.config/custom/firecrawl-stack/secrets`):
+
+```shell
+mkdir -p ~/.config/custom/firecrawl-stack/secrets
+openssl rand -hex 32 > ~/.config/custom/firecrawl-stack/secrets/postgres-password
+```
+
+Optional provider secrets (OpenAI/Ollama key, proxy password) are sourced from
+environment variables — **no files needed**. Leave them unset to disable; see
+[Optional: LLM extraction](#optional-llm-extraction) to enable.
+
+### 2. Run
+
+The `firecrawl` profile is pre-enabled in `.env`, so a plain `up` starts the
+stack:
+
+```shell
+docker compose up -d
+```
+
+`restart: unless-stopped` keeps it running across Docker/host restarts. Stop it:
+
+```shell
+docker compose down
+```
+
+## Use it (AI agents)
+
+Unauthenticated, bound to `127.0.0.1:31002` (trusted local machine). No API key
+or `Authorization` header needed.
+
+```shell
+# health
+curl --fail --silent http://localhost:31002/v0/health/readiness   # {"status":"ok"}
+
+# scrape → markdown
+curl --fail-with-body --silent -X POST http://localhost:31002/v2/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com","formats":["markdown"],"timeout":60000}'
+
+# web search (via bundled SearXNG)
+curl --fail-with-body --silent -X POST http://localhost:31002/v2/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"firecrawl","limit":3}'
+```
+
+### Connect a client
+
+Point the Firecrawl MCP server / SDKs / CLI at `http://localhost:31002` (use any
+dummy API key, since auth is disabled).
+
+## Optional: LLM extraction
+
+Core scrape/crawl/map/search need no model. LLM-structured extraction needs an
+OpenAI-compatible endpoint or Ollama:
+
+1. Uncomment the non-secret settings (base URL, model) in [`llm.env`](llm.env).
+2. Provide the key as an environment variable when starting the stack — it is
+   sourced from your shell, never written to a tracked file:
+
+   ```shell
+   OPENAI_API_KEY=sk-... docker compose up -d
+   ```
+
+Then request structured output via a `json` format object on `/v2/scrape`:
+
+```shell
+curl --fail-with-body --silent -X POST http://localhost:31002/v2/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com","formats":[{"type":"json",
+       "prompt":"Extract the page title","schema":{"type":"object",
+       "properties":{"title":{"type":"string"}}}}]}'
+```
+
+Without a key, the scrape still succeeds but `data.json` is `null` with a
+`warning`. Prefer this over the deprecated `/v2/extract` endpoint.
+
+Screenshots and page actions require Fire-engine (not included).
+
+## Optional: outbound proxy
+
+Uncomment the non-secret settings in [`proxy.env`](proxy.env); supply the
+password the same way as the LLM key: `PROXY_PASSWORD=... docker compose up -d`.
+
+## Notes
+
+- **No persistence.** Redis/RabbitMQ/Postgres run without volumes; in-flight
+  async crawl state is lost on restart. Scrape/search responses are returned to
+  the caller regardless.
+- **Resources.** Defaults reserve `FIRECRAWL_API_MEM` (3G) + `PLAYWRIGHT_MEM`
+  (1G), plus ~1G for the sidecars. Verified to boot + scrape + search on a
+  ~6.3 GiB Docker VM with `NUQ_WORKER_COUNT=1` — raise the Docker Desktop memory
+  allocation if you run other stacks alongside it or hit OOM (harness workers
+  exit with code 137). `NUQ_WORKER_COUNT` is the main lever: it drops the
+  harness from ~10 node processes to ~6.
+- **Upgrade** by bumping `FIRECRAWL_TAG` after reviewing the target release's
+  [`docker-compose.yaml`](https://github.com/firecrawl/firecrawl/blob/main/docker-compose.yaml)
+  and [self-host guide](https://docs.firecrawl.dev/contributing/self-host).
